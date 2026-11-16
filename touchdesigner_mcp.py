@@ -221,7 +221,11 @@ def connect_nodes(source: str, target: str, target_input: int = 0, source_output
 @mcp.tool()
 def set_parameters(path: str, values: dict[str, Any]) -> dict:
     """Imposta uno o piu' parametri di un nodo, per nome Python del parametro:
-    {"resolutionw": 1280, "resolutionh": 720}. Ritorna i valori riletti."""
+    {"resolutionw": 1280, "resolutionh": 720}. Ritorna i valori riletti.
+
+    Un valore puo' anche essere un'espressione, {"period": {"expr": "absTime.seconds"}},
+    o un bind, {"value0": {"bind": "op('ctrl').par.Gain"}}. Se un nome e'
+    sbagliato non cambia niente."""
     return call("set_parameters", path=path, values=values)
 
 
@@ -237,6 +241,182 @@ def run_python(code: str) -> dict:
     tool non coprono. Disponibili: td, op, ops, project, app. Assegna a `result`
     il valore da restituire; cio' che stampi con print torna in `stdout`."""
     return call("run_python", code=code)
+
+
+# ------------------------------------------------------------- ricerca
+@mcp.tool()
+def find_nodes(path: str = "/project1", name: str = "*", op_type: str = "", family: str = "",
+               depth: int = 6, limit: int = 200) -> dict:
+    """Cerca nodi dentro un COMP e nei sotto-COMP. name accetta * e ?
+    (es. "noise*"); op_type e' il tipo esatto (noiseTOP); family TOP, CHOP, SOP,
+    DAT, COMP, MAT o POP."""
+    return call("find_nodes", path=path, name=name, op_type=op_type or None,
+                family=family or None, depth=depth, limit=limit)
+
+
+@mcp.tool()
+def python_help(name: str, filter: str = "") -> dict:
+    """Documentazione Python di TouchDesigner: una classe del modulo td
+    ("OP", "Par", "noiseTOP", "tdu"...) o un nodo (percorso). Ritorna la
+    descrizione e i membri; filter restringe i membri per nome."""
+    return call("python_help", name=name, filter=filter or None)
+
+
+@mcp.tool()
+def get_performance(path: str = "/project1", top: int = 15) -> dict:
+    """I nodi che costano di piu' (tempo di cottura CPU e GPU in ms), per
+    capire cosa abbassa gli fps."""
+    return call("get_performance", path=path, top=top)
+
+
+# ------------------------------------------------------------- nodi
+@mcp.tool()
+def build_node(op_type: str, parent: str = "/project1", name: str = "",
+               params: dict[str, Any] | None = None, inputs: list[str] | None = None,
+               x: int | None = None, y: int | None = None) -> dict:
+    """Crea un nodo, imposta i parametri, collega gli ingressi e controlla gli
+    errori in una sola chiamata. inputs: percorsi dei nodi da collegare agli
+    ingressi 0, 1, ... Se qualcosa fallisce il nodo viene eliminato."""
+    return call("build_node", op_type=op_type, parent=parent, name=name or None,
+                params=params, inputs=inputs, x=x, y=y)
+
+
+@mcp.tool()
+def rename_node(path: str, new_name: str) -> dict:
+    """Rinomina un nodo."""
+    return call("rename_node", path=path, new_name=new_name)
+
+
+@mcp.tool()
+def copy_node(path: str, parent: str = "", name: str = "",
+              x: int | None = None, y: int | None = None) -> dict:
+    """Duplica un nodo (con tutto il contenuto, se e' un COMP), nello stesso
+    COMP o in `parent`. Senza x/y la copia va 200 a destra dell'originale."""
+    return call("copy_node", path=path, parent=parent or None, name=name or None, x=x, y=y)
+
+
+@mcp.tool()
+def disconnect_nodes(target: str, target_input: int = -1) -> dict:
+    """Stacca i collegamenti in ingresso a `target`: uno solo (target_input)
+    o tutti (-1)."""
+    return call("disconnect_nodes", target=target, target_input=target_input)
+
+
+@mcp.tool()
+def set_node_state(path: str, x: int | None = None, y: int | None = None,
+                   color: list[float] | None = None, comment: str | None = None,
+                   bypass: bool | None = None, display: bool | None = None,
+                   render: bool | None = None, lock: bool | None = None,
+                   viewer: bool | None = None) -> dict:
+    """Posizione, colore [r, g, b], commento e flag (bypass, display, render,
+    lock, viewer) di un nodo. Quello che non indichi resta com'e'."""
+    return call("set_node_state", path=path, x=x, y=y, color=color, comment=comment,
+                bypass=bypass, display=display, render=render, lock=lock, viewer=viewer)
+
+
+@mcp.tool()
+def auto_layout(path: str = "/project1", spacing_x: int = 200, spacing_y: int = 150) -> dict:
+    """Riordina i nodi di un COMP da sinistra a destra seguendo i collegamenti,
+    cosi' la rete resta leggibile."""
+    return call("auto_layout", path=path, spacing_x=spacing_x, spacing_y=spacing_y)
+
+
+@mcp.tool()
+def exec_node_method(path: str, method: str, args: list[Any] | None = None,
+                     kwargs: dict[str, Any] | None = None) -> dict:
+    """Chiama un metodo Python di un nodo, es. method="cook" con
+    kwargs={"force": true}. Ritorna il valore restituito. Per i parametri
+    pulse usa pulse_parameter."""
+    return call("exec_node_method", path=path, method=method, args=args, kwargs=kwargs)
+
+
+# ------------------------------------------------------------- dati
+@mcp.tool()
+def read_dat(path: str, max_rows: int = 200) -> dict:
+    """Contenuto di un DAT: righe e celle (tabelle) e testo (Text DAT, script)."""
+    return call("read_dat", path=path, max_rows=max_rows)
+
+
+@mcp.tool()
+def write_dat(path: str, text: str | None = None, rows: list[list[Any]] | None = None,
+              confirm_empty: bool = False) -> dict:
+    """Riscrive un DAT: `text` per i Text DAT e gli script, `rows` per le
+    tabelle. Per svuotarlo serve confirm_empty=true."""
+    return call("write_dat", path=path, text=text, rows=rows, confirm_empty=confirm_empty or None)
+
+
+@mcp.tool()
+def edit_dat(path: str, find: str, replace: str = "", replace_all: bool = False) -> dict:
+    """Modifica mirata di un DAT: sostituisce `find` con `replace`. Se `find`
+    compare piu' volte serve replace_all=true (o un pezzo di testo piu' lungo)."""
+    return call("edit_dat", path=path, find=find, replace=replace, replace_all=replace_all or None)
+
+
+@mcp.tool()
+def read_chop(path: str, max_samples: int = 64, max_channels: int = 64) -> dict:
+    """Valori dei canali di un CHOP (i primi max_samples campioni di ognuno)."""
+    return call("read_chop", path=path, max_samples=max_samples, max_channels=max_channels)
+
+
+# ------------------------------------------------------------- progetto
+@mcp.tool()
+def timeline(play: bool | None = None, frame: float | None = None, rate: float | None = None) -> dict:
+    """Linea del tempo: play/pausa, vai al fotogramma, cambia la frequenza.
+    Senza argomenti legge lo stato."""
+    return call("timeline", play=play, frame=frame, rate=rate)
+
+
+@mcp.tool()
+def save_tox(path: str, file: str) -> dict:
+    """Salva un COMP in un file .tox, per riusarlo in altri progetti."""
+    return call("save_tox", path=path, file=file)
+
+
+@mcp.tool()
+def load_tox(file: str, parent: str = "/project1", name: str = "") -> dict:
+    """Carica un file .tox dentro un COMP."""
+    return call("load_tox", file=file, parent=parent, name=name or None)
+
+
+@mcp.tool()
+def save_project(file: str = "") -> dict:
+    """Salva il progetto .toe (senza file: sul file aperto)."""
+    return call("save_project", file=file or None)
+
+
+@mcp.tool()
+def undo(steps: int = 1, redo: bool = False) -> dict:
+    """Annulla (o ripete) gli ultimi passi. Ogni comando di questo server che
+    cambia il progetto e' un passo solo, batch compreso."""
+    return call("undo", steps=steps, redo=redo or None)
+
+
+@mcp.tool()
+def batch(commands: list[dict[str, Any]]) -> dict:
+    """Esegue piu' comandi del ponte in fila in una sola chiamata, es.
+    [{"cmd": "create_node", "args": {"op_type": "noiseTOP"}},
+     {"cmd": "set_parameters", "args": {"path": "/project1/noise1", "values": {"period": 2}}}].
+    I nomi sono quelli dei tool (senza td_/open_). Si ferma al primo errore;
+    un solo undo annulla tutto."""
+    return call("batch", commands=commands)
+
+
+# ------------------------------------------------------------- prompt
+@mcp.prompt()
+def controlla_rete(path: str = "/project1") -> str:
+    """Controllo di una rete: errori, avvisi, costi e anteprima."""
+    return (f"Controlla la rete {path} in TouchDesigner: usa node_errors per errori e avvisi, "
+            f"get_performance per i nodi piu' lenti e top_preview sui TOP di uscita. "
+            "Riassumi i problemi in ordine di gravita' e proponi le correzioni prima di applicarle.")
+
+
+@mcp.prompt()
+def costruisci_rete(descrizione: str, parent: str = "/project1") -> str:
+    """Costruzione guidata di una rete dalla descrizione."""
+    return (f"Costruisci in {parent} questa rete TouchDesigner: {descrizione}\n"
+            "Procedi cosi': list_operator_types per i nomi giusti; build_node per ogni nodo "
+            "(parametri e ingressi insieme); node_errors dopo ogni gruppo; auto_layout alla fine; "
+            "top_preview sull'uscita per verificare. Se sbagli, undo.")
 
 
 def _install_command() -> str:

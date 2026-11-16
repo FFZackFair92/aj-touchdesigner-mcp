@@ -15,14 +15,21 @@ PNG_1X1 = bytes.fromhex(
 )
 
 
+class ParMode:
+    CONSTANT, EXPRESSION, BIND = "ParMode.CONSTANT", "ParMode.EXPRESSION", "ParMode.BIND"
+
+
 class Par:
     def __init__(self, owner, name, value, style="Float", page="Common"):
         self.owner, self.name, self.val = owner, name, value
         self.label, self.style, self.mode, self.readOnly = name.title(), style, "ParMode.CONSTANT", False
         self.page = types.SimpleNamespace(name=page)
         self.pulsed = 0
+        self.expr = self.bindExpr = ""
 
     def eval(self):
+        if self.mode == ParMode.EXPRESSION:
+            return f"<{self.expr}>"
         return self.val
 
     def pulse(self):
@@ -48,6 +55,13 @@ class Connector:
         self.links.append(other.owner)
         other.links.append(self.owner)
 
+    def disconnect(self):
+        for n in self.links:
+            for c in n.inputConnectors + n.outputConnectors:
+                if self.owner in c.links:
+                    c.links.remove(self.owner)
+        self.links = []
+
 
 class Node:
     family, suffix, comp = "TOP", "TOP", False
@@ -65,7 +79,53 @@ class Node:
         self.inputConnectors = [Connector(self), Connector(self)]
         self.outputConnectors = [Connector(self)]
         self.width, self.height = 1280, 720
-        self.numSamples, self.numRows, self.numCols = 1, 0, 0
+        self.numSamples, self.rate = 4, 60.0
+        self._rows = []
+        self.color, self.bypass, self.lock, self.viewer = (0.55, 0.55, 0.55), False, False, False
+        if self.family in ("SOP", "COMP", "POP"):
+            self.display = self.render = False
+        self.cpuCookTime, self.gpuCookTime, self.totalCooks = 0.1, 0.0, 1
+        self.saved_to = None
+
+    # --- DAT
+    @property
+    def numRows(self):
+        return len(self._rows) if self._rows else (len(self.text.splitlines()) if self.text else 0)
+
+    @property
+    def numCols(self):
+        return max((len(r) for r in self._rows), default=1 if self.text else 0)
+
+    def row(self, i):
+        if self._rows:
+            return [types.SimpleNamespace(val=v) for v in self._rows[i]]
+        return [types.SimpleNamespace(val=self.text.splitlines()[i])]
+
+    def clear(self):
+        self._rows, self.text = [], ""
+
+    def appendRow(self, cells):
+        self._rows.append(list(cells))
+        self.text = "\n".join("\t".join(r) for r in self._rows)
+
+    def parent(self, n=1):
+        return self.parent_node
+
+    def copy(self, other, name=None):
+        node = self.create(type(other), name)
+        for p in other.pars():
+            setattr(node.par, p.name, p.val)
+        return node
+
+    def cook(self, force=False):
+        self.totalCooks += 1
+
+    def save(self, path):
+        self.saved_to = path
+        open(path, "w").write("tox")
+
+    def loadTox(self, path):
+        return self.create(baseCOMP, None)
 
     @property
     def path(self):
@@ -100,7 +160,7 @@ class Node:
         return ""
 
     def chans(self):
-        return [types.SimpleNamespace(name="chan1")]
+        return [types.SimpleNamespace(name="chan1", vals=[0.0, 0.25, 0.5, 0.75])]
 
     def op(self, name):
         return next((c for c in self.children if c.name == name), None)
@@ -141,6 +201,8 @@ noiseTOP = _kind("noiseTOP", "TOP", period=1.0, resolutionw=1280, resolutionh=72
 levelTOP = _kind("levelTOP", "TOP", contrast=1.0, brightness1=1.0)
 constantCHOP = _kind("constantCHOP", "CHOP", value0=0.0)
 textDAT = _kind("textDAT", "DAT")
+tableDAT = _kind("tableDAT", "DAT")
+geometryCOMP = _kind("geometryCOMP", "COMP", comp=True)
 webserverDAT = _kind("webserverDAT", "DAT", port=9980, callbacks="")
 baseCOMP = _kind("baseCOMP", "COMP", comp=True)
 
@@ -162,7 +224,37 @@ def ops(*patterns):
 
 
 app = types.SimpleNamespace(version="099", build="2026.10000")
-project = types.SimpleNamespace(name="finto.toe", folder="C:/finto", cookRate=60.0)
+ROOT.time = types.SimpleNamespace(play=True, frame=1.0, rate=60.0, start=1, end=600)
+
+
+class _Project(types.SimpleNamespace):
+    def save(self, path=None):
+        self.saved = path or "(stesso file)"
+        return True
+
+
+project = _Project(name="finto.toe", folder="C:/finto", cookRate=60.0, saved=None)
+
+
+class _Undo:
+    def __init__(self):
+        self.blocks, self.open, self.undone, self.redone = [], 0, 0, 0
+
+    def startBlock(self, name, enable=True):
+        self.open += 1
+        self.blocks.append(name)
+
+    def endBlock(self):
+        self.open -= 1
+
+    def undo(self):
+        self.undone += 1
+
+    def redo(self):
+        self.redone += 1
+
+
+ui = types.SimpleNamespace(undo=_Undo())
 
 
 def install():

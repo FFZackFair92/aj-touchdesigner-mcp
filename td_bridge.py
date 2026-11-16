@@ -13,7 +13,9 @@ richieste dallo stesso computer e solo con il token salvato in
 """
 import base64
 import contextlib
+import fnmatch
 import hmac
+import inspect
 import io
 import ipaddress
 import json
@@ -23,7 +25,7 @@ import traceback
 import td
 
 TOKEN_FILE = os.path.join(os.path.expanduser("~"), ".aj-mcp", "touchdesigner.token")
-BRIDGE_VERSION = "1.0.0"
+BRIDGE_VERSION = "1.1.0"
 
 
 # ---------------------------------------------------------------- utilita'
@@ -173,9 +175,12 @@ def cmd_create_node(args):
     return _summary(o)
 
 
+SYSTEM_PATHS = ("/", "/project1", "/local", "/sys", "/ui")
+
+
 def cmd_delete_node(args):
     o = _node(args["path"])
-    if o.path in ("/", "/project1", "/local", "/sys", "/ui"):
+    if o.path in SYSTEM_PATHS:
         raise ValueError(f"{o.path} e' un nodo di sistema: non lo elimino")
     path = o.path
     o.destroy()
@@ -200,15 +205,37 @@ def cmd_get_parameters(args):
     return {"path": o.path, "count": len(pars), "parameters": [_par_info(p) for p in pars]}
 
 
+def _set_par(p, value):
+    """Valore fisso, oppure {"expr": "..."} per un'espressione Python o
+    {"bind": "..."} per un bind a un altro parametro."""
+    if isinstance(value, dict):
+        if "expr" in value:
+            p.expr = str(value["expr"])
+            p.mode = td.ParMode.EXPRESSION
+        elif "bind" in value:
+            p.bindExpr = str(value["bind"])
+            p.mode = td.ParMode.BIND
+        else:
+            raise ValueError(f"{p.name}: usa un valore, {{'expr': ...}} oppure {{'bind': ...}}")
+        return
+    if str(p.mode) != str(td.ParMode.CONSTANT):
+        p.mode = td.ParMode.CONSTANT
+    p.val = value
+
+
 def cmd_set_parameters(args):
     o = _node(args["path"])
-    done = {}
-    for name, value in (args.get("values") or {}).items():
+    values = args.get("values") or {}
+    pars = {}
+    for name in values:  # tutti validati prima di toccare qualcosa
         p = getattr(o.par, name, None)
         if p is None:
             raise ValueError(f"{o.path} non ha il parametro '{name}'")
-        p.val = value
-        done[name] = _plain(p.eval())
+        pars[name] = p
+    done = {}
+    for name, value in values.items():
+        _set_par(pars[name], value)
+        done[name] = _plain(pars[name].eval())
     return {"path": o.path, "values": done}
 
 
@@ -258,7 +285,346 @@ def cmd_run_python(args):
     return {"result": _plain(scope.get("result")), "stdout": out.getvalue()[-8000:]}
 
 
+# ------------------------------------------------------- comandi aggiunti (1.1)
+def _safe_name(name):
+    if not isinstance(name, str) or not name or name.startswith("_"):
+        raise ValueError(f"nome non consentito: {name!r}")
+    return name
+
+
+def cmd_find_nodes(args):
+    root = _node(args.get("path", "/project1"))
+    pattern = (args.get("name") or "*").lower()
+    op_type = (args.get("op_type") or "").lower()
+    family = (args.get("family") or "").upper()
+    depth = max(1, min(int(args.get("depth", 6)), 10))
+    limit = int(args.get("limit", 200))
+    hits = [o for o in root.findChildren(depth=depth)
+            if fnmatch.fnmatchcase(o.name.lower(), pattern)
+            and (not op_type or o.OPType.lower() == op_type)
+            and (not family or o.family == family)]
+    return {"root": root.path, "count": len(hits), "truncated": len(hits) > limit,
+            "nodes": [_summary(o) for o in hits[:limit]]}
+
+
+def cmd_rename_node(args):
+    o = _node(args["path"])
+    if o.path in SYSTEM_PATHS:
+        raise ValueError(f"{o.path} e' un nodo di sistema: non lo rinomino")
+    new = str(args["new_name"]).strip()
+    if not new:
+        raise ValueError("nome nuovo vuoto")
+    if o.parent().op(new) is not None:
+        raise ValueError(f"esiste gia' un nodo {new} in {o.parent().path}")
+    old = o.path
+    o.name = new
+    return {"old": old, "path": o.path}
+
+
+def cmd_copy_node(args):
+    o = _node(args["path"])
+    parent = _node(args["parent"]) if args.get("parent") else o.parent()
+    if not parent.isCOMP:
+        raise ValueError(f"{parent.path} non e' un COMP")
+    name = args.get("name") or None
+    new = parent.copy(o, name=name) if name else parent.copy(o)
+    new.nodeX = int(args["x"]) if args.get("x") is not None else o.nodeX + 200
+    new.nodeY = int(args["y"]) if args.get("y") is not None else o.nodeY
+    return _summary(new)
+
+
+def cmd_disconnect_nodes(args):
+    o = _node(args["target"])
+    which = int(args.get("target_input", -1))
+    connectors = list(o.inputConnectors)
+    if which >= len(connectors):
+        raise ValueError(f"{o.path} non ha l'ingresso {which}")
+    chosen = connectors if which < 0 else [connectors[which]]
+    for c in chosen:
+        c.disconnect()
+    return {"target": o.path, "disconnected": "tutti" if which < 0 else which}
+
+
+FLAGS = ("bypass", "display", "render", "lock", "viewer")
+
+
+def cmd_set_node_state(args):
+    o = _node(args["path"])
+    color = args.get("color")
+    if color is not None and len(color) != 3:
+        raise ValueError("color vuole 3 numeri tra 0 e 1 (r, g, b)")
+    for flag in FLAGS:
+        if args.get(flag) is not None and not hasattr(o, flag):
+            raise ValueError(f"{o.path} ({o.family}) non ha il flag {flag}")
+    if args.get("x") is not None:
+        o.nodeX = int(args["x"])
+    if args.get("y") is not None:
+        o.nodeY = int(args["y"])
+    if color is not None:
+        o.color = tuple(float(c) for c in color)
+    if args.get("comment") is not None:
+        o.comment = str(args["comment"])
+    for flag in FLAGS:
+        if args.get(flag) is not None:
+            setattr(o, flag, bool(args[flag]))
+    state = _summary(o)
+    state.update(color=_plain(o.color), comment=o.comment,
+                 **{f: bool(getattr(o, f)) for f in FLAGS if hasattr(o, f)})
+    return state
+
+
+def cmd_auto_layout(args):
+    """Dispone i nodi di un COMP da sinistra a destra seguendo i collegamenti."""
+    comp = _node(args.get("path", "/project1"))
+    if not comp.isCOMP:
+        raise ValueError(f"{comp.path} non e' un COMP")
+    dx, dy = int(args.get("spacing_x", 200)), int(args.get("spacing_y", 150))
+    nodes = [c for c in comp.children if c.name != "aj_mcp"]
+    inside = {n.path for n in nodes}
+    column = {}
+
+    def depth(n, seen=()):
+        if n.path in column:
+            return column[n.path]
+        ups = [i for i in n.inputs if i is not None and i.path in inside and i.path not in seen]
+        column[n.path] = 0 if not ups else 1 + max(depth(i, seen + (n.path,)) for i in ups)
+        return column[n.path]
+
+    for n in nodes:
+        depth(n)
+    rows = {}
+    for n in sorted(nodes, key=lambda n: (column[n.path], n.nodeY * -1, n.name)):
+        r = rows.get(column[n.path], 0)
+        rows[column[n.path]] = r + 1
+        n.nodeX, n.nodeY = column[n.path] * dx, -r * dy
+    return {"path": comp.path, "nodes": len(nodes), "columns": len(rows)}
+
+
+def cmd_read_dat(args):
+    o = _node(args["path"])
+    if o.family != "DAT":
+        raise ValueError(f"{o.path} non e' un DAT")
+    limit = max(1, min(int(args.get("max_rows", 200)), 5000))
+    rows = [[c.val for c in o.row(i)] for i in range(min(o.numRows, limit))]
+    return {"path": o.path, "rows_total": o.numRows, "cols": o.numCols,
+            "truncated": o.numRows > limit, "rows": rows, "text": o.text[:20000]}
+
+
+def cmd_write_dat(args):
+    o = _node(args["path"])
+    if o.family != "DAT":
+        raise ValueError(f"{o.path} non e' un DAT")
+    text, rows = args.get("text"), args.get("rows")
+    if (text is None) == (rows is None):
+        raise ValueError("indica text oppure rows (non entrambi)")
+    if not (text or rows) and not args.get("confirm_empty"):
+        raise ValueError(f"svuoterei {o.path}: ripeti con confirm_empty=true se e' voluto")
+    if rows is not None:
+        o.clear()
+        for r in rows:
+            o.appendRow([str(c) for c in r])
+    else:
+        o.text = str(text)
+    return {"path": o.path, "rows": o.numRows, "cols": o.numCols}
+
+
+def cmd_edit_dat(args):
+    o = _node(args["path"])
+    if o.family != "DAT":
+        raise ValueError(f"{o.path} non e' un DAT")
+    find, repl = str(args["find"]), str(args.get("replace", ""))
+    hits = o.text.count(find)
+    if hits == 0:
+        raise ValueError(f"testo da sostituire non trovato in {o.path}")
+    if hits > 1 and not args.get("replace_all"):
+        raise ValueError(f"il testo compare {hits} volte: allarga find o usa replace_all=true")
+    o.text = o.text.replace(find, repl)
+    return {"path": o.path, "replaced": hits}
+
+
+def cmd_read_chop(args):
+    o = _node(args["path"])
+    if o.family != "CHOP":
+        raise ValueError(f"{o.path} non e' un CHOP")
+    limit = max(1, min(int(args.get("max_samples", 64)), 4096))
+    chans = list(o.chans())[: int(args.get("max_channels", 64))]
+    return {"path": o.path, "samples": o.numSamples, "rate": _plain(getattr(o, "rate", None)),
+            "channels": {c.name: [round(float(v), 6) for v in list(c.vals)[:limit]] for c in chans}}
+
+
+def cmd_exec_node_method(args):
+    o = _node(args["path"])
+    name = _safe_name(args["method"])
+    fn = getattr(o, name, None)
+    if not callable(fn):
+        raise ValueError(f"{o.path} non ha il metodo {name}")
+    return {"path": o.path, "method": name,
+            "result": _plain(fn(*(args.get("args") or []), **(args.get("kwargs") or {})))}
+
+
+def cmd_python_help(args):
+    """Membri e documentazione di una classe di td (OP, Par, noiseTOP...) o di un nodo."""
+    target = str(args["name"])
+    obj = td.op(target) if target.startswith("/") else getattr(td, target, None)
+    if obj is None:
+        raise ValueError(f"non trovato: {target} (usa un nome di td, es. 'OP', o il percorso di un nodo)")
+    needle = (args.get("filter") or "").lower()
+    members = []
+    for n in dir(obj):
+        if n.startswith("_") or needle not in n.lower():
+            continue
+        try:
+            v = getattr(obj, n)
+        except Exception:
+            continue
+        doc = (inspect.getdoc(v) or "").split("\n")[0] if callable(v) else ""
+        members.append({"name": n, "kind": "metodo" if callable(v) else "attributo", "doc": doc[:200]})
+    return {"name": target, "doc": (inspect.getdoc(obj) or "")[:4000], "members": members[:400]}
+
+
+def cmd_get_performance(args):
+    root = _node(args.get("path", "/project1"))
+    top = max(1, min(int(args.get("top", 15)), 100))
+    rows = []
+    for o in root.findChildren(depth=10):
+        cpu = float(getattr(o, "cpuCookTime", 0) or 0)
+        gpu = float(getattr(o, "gpuCookTime", 0) or 0)
+        rows.append({"path": o.path, "type": o.OPType, "cpu_ms": round(cpu, 3), "gpu_ms": round(gpu, 3),
+                     "cooks": int(getattr(o, "totalCooks", 0) or 0)})
+    rows.sort(key=lambda r: r["cpu_ms"] + r["gpu_ms"], reverse=True)
+    return {"path": root.path, "fps_target": td.project.cookRate, "nodes": len(rows),
+            "total_ms": round(sum(r["cpu_ms"] + r["gpu_ms"] for r in rows), 3), "slowest": rows[:top]}
+
+
+def cmd_timeline(args):
+    t = td.op("/").time
+    if args.get("rate") is not None:
+        t.rate = float(args["rate"])
+    if args.get("frame") is not None:
+        t.frame = float(args["frame"])
+    if args.get("play") is not None:
+        t.play = bool(args["play"])
+    return {"play": bool(t.play), "frame": _plain(t.frame), "rate": _plain(t.rate),
+            "start": _plain(getattr(t, "start", None)), "end": _plain(getattr(t, "end", None))}
+
+
+def _abs(path, ext):
+    path = os.path.abspath(os.path.expanduser(str(path)))
+    if not path.lower().endswith(ext):
+        raise ValueError(f"il file deve finire in {ext}")
+    return path
+
+
+def cmd_save_tox(args):
+    o = _node(args["path"])
+    if not o.isCOMP:
+        raise ValueError(f"{o.path} non e' un COMP: solo i COMP si salvano in .tox")
+    path = _abs(args["file"], ".tox")
+    if not os.path.isdir(os.path.dirname(path)):
+        raise ValueError(f"cartella non trovata: {os.path.dirname(path)}")
+    o.save(path)
+    return {"path": o.path, "file": path}
+
+
+def cmd_load_tox(args):
+    parent = _node(args.get("parent", "/project1"))
+    if not parent.isCOMP:
+        raise ValueError(f"{parent.path} non e' un COMP")
+    path = _abs(args["file"], ".tox")
+    if not os.path.isfile(path):
+        raise ValueError(f"file non trovato: {path}")
+    o = parent.loadTox(path)
+    if args.get("name"):
+        o.name = str(args["name"])
+    return _summary(o)
+
+
+def cmd_save_project(args):
+    path = _abs(args["file"], ".toe") if args.get("file") else None
+    ok = td.project.save(path) if path else td.project.save()
+    return {"saved": bool(ok) if ok is not None else True, "project": td.project.name,
+            "folder": td.project.folder}
+
+
+def cmd_build_node(args):
+    """Crea, imposta, collega e controlla in un colpo solo."""
+    params = args.get("params") or {}
+    created = cmd_create_node(args)
+    o = td.op(created["path"])
+    try:
+        for name in params:
+            if getattr(o.par, name, None) is None:
+                raise ValueError(f"{o.OPType} non ha il parametro '{name}'")
+        for name, value in params.items():
+            _set_par(getattr(o.par, name), value)
+        for i, src in enumerate(args.get("inputs") or []):
+            if src:
+                cmd_connect_nodes({"source": src, "target": o.path, "target_input": i})
+    except Exception:
+        o.destroy()  # niente nodi a meta'
+        raise
+    with contextlib.suppress(Exception):
+        o.cook(force=True)
+    info = cmd_node_info({"path": o.path})
+    info["params"] = {n: _plain(getattr(o.par, n).eval()) for n in params}
+    return info
+
+
+def _undo_manager():
+    ui = getattr(td, "ui", None)
+    return getattr(ui, "undo", None)
+
+
+def cmd_undo(args):
+    u = _undo_manager()
+    action = "redo" if args.get("redo") else "undo"
+    fn = getattr(u, action, None)
+    if fn is None:
+        raise RuntimeError(f"{action} non disponibile in questa versione di TouchDesigner")
+    steps = max(1, min(int(args.get("steps", 1)), 50))
+    for _ in range(steps):
+        fn()
+    return {"action": action, "steps": steps}
+
+
+def cmd_batch(args):
+    """Esegue piu' comandi in fila; si ferma al primo errore."""
+    results = []
+    for i, step in enumerate(args.get("commands") or []):
+        name = step.get("cmd")
+        if name in ("batch", "undo"):
+            raise ValueError(f"passo {i}: {name} non si puo' usare dentro batch")
+        fn = COMMANDS.get(name)
+        if fn is None:
+            raise ValueError(f"passo {i}: comando sconosciuto {name}")
+        try:
+            results.append(fn(step.get("args") or {}))
+        except Exception as e:
+            raise RuntimeError(f"passo {i} ({name}) fallito dopo {i} riusciti: {type(e).__name__}: {e}") from None
+    return {"steps": len(results), "results": results}
+
+
+
 COMMANDS = {name[4:]: fn for name, fn in list(globals().items()) if name.startswith("cmd_")}
+
+
+READ_ONLY = {"status", "list_nodes", "node_info", "get_parameters", "node_errors", "top_preview",
+             "list_operator_types", "find_nodes", "read_dat", "read_chop", "python_help",
+             "get_performance", "undo"}
+
+
+def _undoable(name, fn, args):
+    """I comandi che cambiano il progetto finiscono in un unico passo di
+    annullamento: Ctrl+Z in TouchDesigner annulla l'intero comando."""
+    u = _undo_manager()
+    if name in READ_ONLY or u is None or not hasattr(u, "startBlock"):
+        return fn(args)
+    u.startBlock(f"AJ MCP {name}")
+    try:
+        return fn(args)
+    finally:
+        with contextlib.suppress(Exception):
+            u.endBlock()
 
 
 # ---------------------------------------------------------------- callback
@@ -285,7 +651,7 @@ def onHTTPRequest(webServerDAT, request, response):
         fn = COMMANDS.get(body.get("cmd"))
         if fn is None:
             raise ValueError(f"comando sconosciuto: {body.get('cmd')}")
-        return _reply(response, 200, "OK", {"ok": True, "result": fn(body.get("args") or {})})
+        return _reply(response, 200, "OK", {"ok": True, "result": _undoable(body.get("cmd"), fn, body.get("args") or {})})
     except Exception as e:
         return _reply(response, 200, "OK", {
             "ok": False,

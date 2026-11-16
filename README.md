@@ -55,21 +55,48 @@ uv run --script check_live.py
 
 Crea un COMP temporaneo, ci prova ogni funzione e lo elimina.
 
-## Tool
+## Tool (34)
 
 **Avvio** — `open_touchdesigner(project, wait_seconds)`: apre TouchDesigner (o un
 .toe) e aspetta il ponte; se e' gia' aperto non ne apre un altro
 
-**Lettura** — `td_status` · `list_nodes(path, depth)` · `node_info(path)` ·
-`get_parameters(path, filter)` · `node_errors(path)` · `list_operator_types(family)` ·
-`top_preview(path)` (immagine di uscita di un TOP)
+**Lettura** — `td_status` · `list_nodes(path, depth)` · `find_nodes(path, name, op_type, family)`
+(name con `*` e `?`) · `node_info(path)` · `get_parameters(path, filter)` ·
+`node_errors(path)` · `list_operator_types(family)` · `top_preview(path)` (immagine
+di uscita di un TOP) · `read_dat(path)` · `read_chop(path)` · `get_performance(path, top)`
+(i nodi che costano di piu' in CPU e GPU) · `python_help(name, filter)` (documentazione
+di una classe di `td` o di un nodo)
 
-**Scrittura** — `create_node(op_type, parent, name, x, y)` · `delete_node(path)` ·
-`connect_nodes(source, target, target_input, source_output)` ·
-`set_parameters(path, values)` · `pulse_parameter(path, name)`
+**Costruzione** — `build_node(op_type, parent, name, params, inputs)` (crea, imposta,
+collega e controlla gli errori in un colpo; se fallisce non lascia niente) ·
+`create_node(op_type, parent, name, x, y)` · `copy_node` · `rename_node` · `delete_node` ·
+`connect_nodes(source, target, target_input, source_output)` · `disconnect_nodes(target, target_input)` ·
+`auto_layout(path)` (riordina la rete da sinistra a destra)
+
+**Parametri e stato** — `set_parameters(path, values)`: valori fissi,
+`{"expr": "absTime.seconds"}` per un'espressione o `{"bind": "..."}`; se un nome e'
+sbagliato non cambia niente · `pulse_parameter(path, name)` ·
+`set_node_state(path, x, y, color, comment, bypass, display, render, lock, viewer)` ·
+`exec_node_method(path, method, args, kwargs)`
+
+**DAT** — `write_dat(path, text | rows)` (per svuotare serve `confirm_empty`) ·
+`edit_dat(path, find, replace, replace_all)` (sostituzione mirata, rifiuta i testi ambigui)
+
+**Progetto** — `timeline(play, frame, rate)` · `save_tox(path, file)` · `load_tox(file, parent)` ·
+`save_project(file)`
+
+**Annulla e lotti** — ogni comando che cambia il progetto e' un solo passo di
+annullamento (Ctrl+Z in TouchDesigner) · `undo(steps, redo)` ·
+`batch(commands)`: piu' comandi in una chiamata, si ferma al primo errore, un solo undo
 
 **Tutto il resto** — `run_python(code)`: codice Python dentro TouchDesigner, con
 `td`, `op`, `ops`, `project`, `app`. Quello che assegni a `result` torna indietro.
+
+**Prompt** — `costruisci_rete(descrizione)` · `controlla_rete(path)`
+
+> I tool aggiunti nella 1.1 (tutti tranne i primi 14) sono provati contro il finto
+> TouchDesigner; `check_live.py` li prova dal vivo. Dopo l'aggiornamento rilancia la
+> riga di installazione del ponte in ogni progetto (passo 2).
 
 ## Sicurezza
 

@@ -40,9 +40,33 @@ try:
     assert img.data[:8] == b"\x89PNG\r\n\x1a\n", "l'anteprima non e' un PNG"
     print(f"anteprima TOP: ok ({len(img.data)} byte)")
 
+    c = m.build_node("levelTOP", parent=BOX, name="finale", params={"opacity": 0.8}, inputs=[b["path"]])
+    assert c["inputs"] == [b["path"]], c
+    m.set_parameters(c["path"], {"brightness1": {"expr": "1 + 0.1"}})
+    assert abs(m.get_parameters(c["path"], "brightness1")["parameters"][0]["value"] - 1.1) < 1e-6
+    assert [n["name"] for n in m.find_nodes(BOX, name="fin*")["nodes"]] == ["finale"]
+    m.set_node_state(c["path"], color=[0.2, 0.6, 1.0], comment="prova AJ")
+    m.auto_layout(BOX)
+    print("build_node + espressione + ricerca + layout: ok")
+
+    t = m.create_node("tableDAT", parent=BOX, name="tabella")
+    m.write_dat(t["path"], rows=[["a", "b"], ["1", "2"]])
+    assert m.read_dat(t["path"])["rows"] == [["a", "b"], ["1", "2"]]
+    k = m.create_node("constantCHOP", parent=BOX, name="valori")
+    assert m.read_chop(k["path"])["samples"] >= 1
+    print("DAT e CHOP: ok")
+
+    print(f"timeline: {m.timeline()}")
+    print(f"nodo piu' lento: {m.get_performance(BOX, top=1)['slowest']}")
+    assert m.python_help("OP", filter="cook")["members"], "python_help vuoto"
+    r = m.batch([{"cmd": "copy_node", "args": {"path": a["path"], "name": "rumore_b"}},
+                 {"cmd": "rename_node", "args": {"path": BOX + "/rumore_b", "new_name": "rumore_c"}}])
+    assert r["steps"] == 2, r
+    print("python_help + batch: ok")
+
     e = m.node_errors(BOX)
     print(f"errori nel COMP di prova: {e['errors'] or 'nessuno'}")
-    assert m.list_nodes(BOX)["count"] == 2
+    assert m.list_nodes(BOX)["count"] == 6
 finally:
     m.delete_node(BOX)
 print("tutto ok, COMP di prova eliminato")
