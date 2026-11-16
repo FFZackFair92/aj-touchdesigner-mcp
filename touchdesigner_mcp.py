@@ -10,11 +10,16 @@ Web Server DAT sulla porta 9990). Installazione del ponte: vedi README.
 Config (variabili d'ambiente, tutte facoltative):
   AJ_TD_URL    indirizzo del ponte      (default http://127.0.0.1:9990)
   AJ_TD_TOKEN  token                    (default: letto da ~/.aj-mcp/touchdesigner.token)
+  AJ_TD_EXE    eseguibile di TouchDesigner per open_touchdesigner (default: cercato da solo)
 """
 import base64
+import glob
 import json
 import os
+import shutil
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -67,6 +72,78 @@ def call(cmd: str, **args: Any) -> Any:
     if not reply.get("ok"):
         raise RuntimeError(reply.get("error", "errore sconosciuto"))
     return reply["result"]
+
+
+# -------------------------------------------------------------------- avvio
+def _version_key(path: str) -> list[int]:
+    digits = "".join(c if c.isdigit() else " " for c in path).split()
+    return [int(d) for d in digits]
+
+
+def find_touchdesigner() -> str | None:
+    """Percorso dell'eseguibile di TouchDesigner: AJ_TD_EXE, poi il PATH, poi
+    le cartelle di installazione abituali (la versione piu' recente)."""
+    env = os.environ.get("AJ_TD_EXE")
+    if env:
+        return env if os.path.isfile(env) else None
+    found = shutil.which("TouchDesigner")
+    if found:
+        return found
+    if sys.platform == "win32":
+        roots = [os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramW6432", "")]
+        hits = [p for r in roots if r
+                for p in glob.glob(os.path.join(r, "Derivative", "TouchDesigner*", "bin", "TouchDesigner.exe"))]
+    elif sys.platform == "darwin":
+        hits = glob.glob("/Applications/TouchDesigner*.app/Contents/MacOS/TouchDesigner")
+    else:
+        hits = []
+    return max(hits, key=_version_key) if hits else None
+
+
+def _launch(command: list[str]) -> None:
+    """Avvia un programma staccato da questo processo, cosi' resta aperto."""
+    quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(command, creationflags=flags, close_fds=True, **quiet)
+    else:
+        subprocess.Popen(command, start_new_session=True, close_fds=True, **quiet)
+
+
+@mcp.tool()
+def open_touchdesigner(project: str = "", wait_seconds: int = 90) -> dict:
+    """Apre TouchDesigner su questo computer e aspetta che il ponte risponda.
+
+    Se TouchDesigner e' gia' aperto con il ponte attivo non ne apre un altro.
+    project: un file .toe da aprire (facoltativo; senza, parte il progetto di
+    avvio). Il ponte risponde solo se il progetto aperto lo contiene.
+    """
+    try:
+        return {"opened": False, "note": "TouchDesigner era gia' aperto", **call("status")}
+    except RuntimeError as e:
+        if "non risponde" not in str(e) and "Token non trovato" not in str(e):
+            raise
+    exe = find_touchdesigner()
+    if exe is None:
+        raise RuntimeError("TouchDesigner non trovato: installalo o indica il percorso nella variabile AJ_TD_EXE.")
+    command = [exe]
+    if project:
+        path = os.path.abspath(os.path.expanduser(project))
+        if not os.path.isfile(path):
+            raise RuntimeError(f"file non trovato: {path}")
+        command.append(path)
+    _launch(command)
+    deadline = time.time() + max(1, min(int(wait_seconds), 300))
+    while time.time() < deadline:
+        time.sleep(1)
+        try:
+            return {"opened": True, "executable": exe, **call("status")}
+        except RuntimeError:
+            continue
+    raise RuntimeError(
+        f"TouchDesigner e' stato avviato ({exe}) ma il ponte non risponde: "
+        "il progetto aperto non contiene il ponte aj_mcp (vedi README, installazione)."
+    )
 
 
 # ------------------------------------------------------------------- lettura

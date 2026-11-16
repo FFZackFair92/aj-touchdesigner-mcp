@@ -57,6 +57,9 @@ Crea un COMP temporaneo, ci prova ogni funzione e lo elimina.
 
 ## Tool
 
+**Avvio** — `open_touchdesigner(project, wait_seconds)`: apre TouchDesigner (o un
+.toe) e aspetta il ponte; se e' gia' aperto non ne apre un altro
+
 **Lettura** — `td_status` · `list_nodes(path, depth)` · `node_info(path)` ·
 `get_parameters(path, filter)` · `node_errors(path)` · `list_operator_types(family)` ·
 `top_preview(path)` (immagine di uscita di un TOP)
@@ -84,6 +87,7 @@ Chi ha quel file puo' pilotare TouchDesigner: non condividerlo.
 |---|---|---|
 | `AJ_TD_URL` | `http://127.0.0.1:9990` | indirizzo del ponte |
 | `AJ_TD_TOKEN` | letto dal file | token, se vuoi passarlo a mano |
+| `AJ_TD_EXE` | cercato da solo | eseguibile di TouchDesigner per `open_touchdesigner` |
 
 Per cambiare porta: aggiungi `"BRIDGE_PORT": 9995` al dizionario della riga di
 installazione e imposta `AJ_TD_URL` di conseguenza.

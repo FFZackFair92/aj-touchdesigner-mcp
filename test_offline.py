@@ -109,6 +109,11 @@ for bad, needle in (
 assert m.delete_node(b["path"]) == {"deleted": "/project1/level1"}
 assert fake_td.op("/project1/level1") is None
 
+# --- avvio: con il ponte attivo non lancia niente
+os.environ["AJ_TD_EXE"] = str(HERE / "non_esiste.exe")
+already = m.open_touchdesigner()
+assert already["opened"] is False and "gia' aperto" in already["note"], already
+
 # --- TouchDesigner spento
 server.shutdown()
 server.server_close()
@@ -119,8 +124,29 @@ except RuntimeError as e:
     assert "non risponde" in str(e), e
 
 # --- il server MCP registra i tool
+# --- avvio a programma chiuso: eseguibile mancante, poi eseguibile finto che non apre il ponte
+try:
+    m.open_touchdesigner(wait_seconds=1)
+    raise AssertionError("mancava l'errore di eseguibile non trovato")
+except RuntimeError as e:
+    assert "non trovato" in str(e), e
+os.environ["AJ_TD_EXE"] = sys.executable
+finto = Path(tempfile.mkdtemp()) / "finto.py"
+finto.write_text("pass\n", encoding="utf-8")
+try:
+    m.open_touchdesigner(str(finto), wait_seconds=1)
+    raise AssertionError("mancava l'errore di ponte che non risponde")
+except RuntimeError as e:
+    assert "avviato" in str(e) and "ponte non risponde" in str(e), e
+try:
+    m.open_touchdesigner(str(finto) + ".manca", wait_seconds=1)
+    raise AssertionError("mancava l'errore di file non trovato")
+except RuntimeError as e:
+    assert "file non trovato" in str(e), e
+os.environ.pop("AJ_TD_EXE")
+
 tools = asyncio.run(m.mcp.list_tools())
 names = sorted(t.name for t in tools)
-assert len(names) == 13, names
+assert len(names) == 14, names
 assert "exec(open(" in m._install_command()
 print(f"ok: {len(names)} tool -> {', '.join(names)}")
