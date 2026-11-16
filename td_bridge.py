@@ -15,6 +15,7 @@ import base64
 import contextlib
 import hmac
 import io
+import ipaddress
 import json
 import os
 import traceback
@@ -22,7 +23,6 @@ import traceback
 import td
 
 TOKEN_FILE = os.path.join(os.path.expanduser("~"), ".aj-mcp", "touchdesigner.token")
-LOCAL = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
 BRIDGE_VERSION = "1.0.0"
 
 
@@ -33,6 +33,25 @@ def _token():
             return f.read().strip()
     except OSError:
         return ""
+
+
+def _is_local(address):
+    """Vero se la richiesta arriva da questo computer. TouchDesigner passa
+    l'indirizzo in forme diverse secondo la versione: con o senza porta, IPv4
+    o IPv6, anche IPv4 mappato su IPv6 (::ffff:127.0.0.1)."""
+    text = str(address or "").strip().lower()
+    if text.startswith("["):  # [::1]:54321
+        text = text[1:].split("]")[0]
+    elif text.count(":") == 1:  # 127.0.0.1:54321
+        text = text.split(":")[0]
+    if text == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return (mapped or ip).is_loopback
 
 
 def _header(request, name):
@@ -252,8 +271,9 @@ def _reply(response, status, reason, payload):
 
 
 def onHTTPRequest(webServerDAT, request, response):
-    if request.get("clientAddress", "127.0.0.1") not in LOCAL:
-        return _reply(response, 403, "Forbidden", {"ok": False, "error": "solo richieste locali"})
+    if not _is_local(request.get("clientAddress")):
+        return _reply(response, 403, "Forbidden", {
+            "ok": False, "error": f"solo richieste locali (ricevuta da: {request.get('clientAddress')!r})"})
     token = _token()
     if not token or not hmac.compare_digest(_header(request, "X-AJ-Token"), token):
         return _reply(response, 401, "Unauthorized", {"ok": False, "error": "token mancante o errato"})

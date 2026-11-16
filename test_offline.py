@@ -42,6 +42,12 @@ os.environ["AJ_TD_URL"] = f"http://127.0.0.1:{server.server_address[1]}"
 
 m = importlib.import_module("touchdesigner_mcp")
 
+# --- solo richieste locali, in tutte le forme in cui TouchDesigner passa l'indirizzo
+for addr, ok in (("127.0.0.1", True), ("127.0.0.1:54321", True), ("::1", True), ("[::1]:54321", True),
+                 ("::ffff:127.0.0.1", True), ("localhost", True), ("192.168.1.20", False),
+                 ("192.168.1.20:80", False), ("::ffff:10.0.0.5", False), ("", False), (None, False)):
+    assert bridge._is_local(addr) is ok, addr
+
 # --- token
 os.environ["AJ_TD_TOKEN"] = "sbagliato"
 try:
