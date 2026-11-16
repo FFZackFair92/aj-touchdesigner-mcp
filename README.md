@@ -9,9 +9,9 @@ MadMapper MCP.
 Claude  <--stdio-->  touchdesigner_mcp.py  <--HTTP locale :9990-->  td_bridge.py (Web Server DAT nel progetto)
 ```
 
-> **Stato:** i test offline passano contro un finto TouchDesigner (`fake_td.py`).
-> La prova con TouchDesigner vero si fa con `check_live.py`: finche' non l'hai
-> lanciata, considera il ponte non verificato sulla tua versione.
+> **Stato:** provato dal vivo con TouchDesigner 2025.33230 su Windows
+> (`check_live.py`). I test offline girano contro un finto TouchDesigner
+> (`fake_td.py`). Su altre versioni lancia `check_live.py` prima di fidarti.
 
 ## 1. Installa uv
 

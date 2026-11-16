@@ -113,7 +113,7 @@ def _par_info(p):
 def cmd_status(args):
     return {
         "bridge": BRIDGE_VERSION,
-        "touchdesigner": f"{td.app.version}.{td.app.build}",
+        "touchdesigner": str(td.app.build),
         "project": td.project.name,
         "folder": td.project.folder,
         "fps": td.project.cookRate,

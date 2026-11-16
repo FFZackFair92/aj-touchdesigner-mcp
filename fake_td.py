@@ -161,7 +161,7 @@ def ops(*patterns):
     return [n for n in (op(p) for p in patterns) if n is not None]
 
 
-app = types.SimpleNamespace(version="2026", build="10000")
+app = types.SimpleNamespace(version="099", build="2026.10000")
 project = types.SimpleNamespace(name="finto.toe", folder="C:/finto", cookRate=60.0)
 
 
