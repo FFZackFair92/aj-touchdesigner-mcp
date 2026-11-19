@@ -55,7 +55,7 @@ uv run --script check_live.py
 
 Crea un COMP temporaneo, ci prova ogni funzione e lo elimina.
 
-## Tool (34)
+## Tool (41)
 
 **Avvio** — `open_touchdesigner(project, wait_seconds)`: apre TouchDesigner (o un
 .toe) e aspetta il ponte; se e' gia' aperto non ne apre un altro
@@ -85,6 +85,19 @@ sbagliato non cambia niente · `pulse_parameter(path, name)` ·
 **Progetto** — `timeline(play, frame, rate)` · `save_tox(path, file)` · `load_tox(file, parent)` ·
 `save_project(file)`
 
+**Valori vivi e analisi (1.2)** — `sample_node(path, points)`: legge i valori di qualsiasi
+nodo, non solo i CHOP: TOP (min/max/media per canale, immagine nera sì/no, pixel ai punti uv),
+SOP e POP (punti, primitive, bounds, attributi), DAT, CHOP con statistiche ·
+`op_help(op_type)` (tutti i parametri di un tipo con default e voci di menu, prima di crearlo) ·
+`network_snapshot(path)` (la rete in testo: solo i parametri cambiati, espressioni e bind,
+ingressi e flag) · `cook_node(path, recurse)`
+
+**Shader, pannelli e file (1.2)** — `glsl_shader(name, code)`: GLSL TOP + DAT del pixel
+shader, compila e ridà gli errori (collega `uTime` da solo) · `custom_parameters(path, action)`:
+aggiunge, elenca e toglie parametri custom di un COMP (float, int, toggle, pulse, menu, rgb,
+file, op…) · `dat_file(path, file, action)`: salva un DAT su disco, lo ricarica o lo tiene
+sincronizzato con il file (script e shader sotto git)
+
 **Annulla e lotti** — ogni comando che cambia il progetto e' un solo passo di
 annullamento (Ctrl+Z in TouchDesigner) · `undo(steps, redo)` ·
 `batch(commands)`: piu' comandi in una chiamata, si ferma al primo errore, un solo undo
@@ -94,9 +107,18 @@ annullamento (Ctrl+Z in TouchDesigner) · `undo(steps, redo)` ·
 
 **Prompt** — `costruisci_rete(descrizione)` · `controlla_rete(path)`
 
-> I tool aggiunti nella 1.1 (tutti tranne i primi 14) sono provati contro il finto
-> TouchDesigner; `check_live.py` li prova dal vivo. Dopo l'aggiornamento rilancia la
+> I tool aggiunti nella 1.1 e nella 1.2 sono provati contro il finto TouchDesigner;
+> `check_live.py` li prova dal vivo. Dopo l'aggiornamento rilancia la
 > riga di installazione del ponte in ogni progetto (passo 2).
+
+## Confronto (novembre 2026)
+
+- **TDMCP di Derivative (ufficiale, beta, 26 tool)**: gira dentro TouchDesigner senza ponte. Dalla 1.2 qui ci sono
+  anche le sue funzioni che mancavano: valori vivi di TOP/SOP/POP/DAT (`sample_node`), parametri di un tipo prima di
+  crearlo (`op_help`), DAT sincronizzati con file (`dat_file`). In più: costruzione con annullamento (`build_node`,
+  `batch`, un solo Ctrl+Z), shader GLSL con errori di compilazione, parametri custom e fotografia della rete.
+- **8beeeaaat/touchdesigner-mcp (14)**, **Envoy/Embody (~47)**, **TD_MCP (39)**, **MindDesigner/tdmcp**: coperture
+  simili o più strette; nessuno unisce valori vivi, shader e pannelli custom.
 
 ## Sicurezza
 

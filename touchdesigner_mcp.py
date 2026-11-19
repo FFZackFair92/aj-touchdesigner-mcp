@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mcp>=1.2,<2"]
+# dependencies = ["mcp>=1.10,<3"]
 # ///
 """AJ TouchDesigner MCP: server MCP che pilota TouchDesigner.
 
@@ -24,6 +24,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from mcp.types import ToolAnnotations
 
 try:  # mcp SDK 2.x
     from mcp.server.mcpserver import Image, MCPServer as FastMCP
@@ -399,6 +401,64 @@ def batch(commands: list[dict[str, Any]]) -> dict:
     I nomi sono quelli dei tool (senza td_/open_). Si ferma al primo errore;
     un solo undo annulla tutto."""
     return call("batch", commands=commands)
+
+
+# ------------------------------------------------------- 1.2: valori vivi, shader, pannelli
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def sample_node(path: str, points: list[list[float]] | None = None, limit: int = 32) -> dict:
+    """Valori vivi di qualsiasi nodo. TOP: min/max/media per canale, 'black' se l'immagine e' nera, pixel ai punti
+    uv [[0.5, 0.5], ...]. CHOP: min/max/media e primi campioni di ogni canale. SOP/POP: punti, primitive, bounds,
+    primi punti e attributi. DAT: righe. Serve per capire se una rete 'reagisce' senza guardare l'anteprima."""
+    return call("sample_node", path=path, points=points, limit=limit)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def op_help(op_type: str, filter: str = "") -> dict:
+    """Tutti i parametri di un TIPO di operatore (es. 'noiseTOP', 'audiospectrumCHOP') con pagina, stile, default e
+    voci dei menu, prima di crearlo. filter cerca nel nome o nell'etichetta."""
+    return call("op_help", op_type=op_type, filter=filter or None)
+
+
+@mcp.tool()
+def dat_file(path: str, file: str, action: str = "save") -> dict:
+    """Un DAT e un file su disco: save (scrive il DAT nel file, es. per versionare script e shader con git),
+    load (legge il file nel DAT), sync (il DAT segue il file e si ricarica quando cambia)."""
+    return call("dat_file", path=path, file=file, action=action)
+
+
+@mcp.tool()
+def custom_parameters(path: str, action: str = "list", name: str = "", style: str = "float", page: str = "Custom",
+                      label: str = "", default: Any = None, min: float | None = None, max: float | None = None,
+                      clamp: bool = False, menu: list[str] | None = None) -> dict:
+    """Parametri custom di un COMP, cioe' il pannello di controllo di un componente. action: list | add | remove.
+    style: float, int, toggle, pulse, str, menu, rgb, rgba, xy, xyz, file, folder, op, top, chop, header...
+    Il nome diventa con l'iniziale maiuscola (regola di TouchDesigner). Poi si collega con set_parameters e
+    {"expr": "parent().par.Velocita"}."""
+    return call("custom_parameters", path=path, action=action, name=name or None, style=style, page=page,
+                label=label or None, default=default, min=min, max=max, clamp=clamp or None, menu=menu)
+
+
+@mcp.tool()
+def cook_node(path: str, recurse: bool = False) -> dict:
+    """Forza il ricalcolo di un nodo (recurse: anche quelli a monte) e riporta costo ed errori."""
+    return call("cook_node", path=path, recurse=recurse or None)
+
+
+@mcp.tool()
+def glsl_shader(name: str = "glsl1", code: str = "", parent: str = "/project1",
+                resolution: list[int] | None = None, inputs: list[str] | None = None) -> dict:
+    """Crea o aggiorna un GLSL TOP con il suo pixel shader in un DAT, scrive il codice, compila e restituisce gli
+    errori di compilazione. Senza code mette uno shader di prova. Se il codice usa uTime lo collega al tempo.
+    Ripeti con il codice corretto finche' compiled e' true, poi sample_node o top_preview per vederlo."""
+    return call("glsl_shader", name=name, code=code or None, parent=parent, resolution=resolution, inputs=inputs)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def network_snapshot(path: str = "/project1", depth: int = 1, include_dat_text: bool = False) -> dict:
+    """Fotografia testuale di una rete: tipo, posizione, flag, ingressi e SOLO i parametri cambiati dal default
+    (espressioni e bind compresi). Per capire una rete a colpo d'occhio, confrontarla prima/dopo o ricostruirla
+    altrove con batch."""
+    return call("network_snapshot", path=path, depth=depth, include_dat_text=include_dat_text or None)
 
 
 # ------------------------------------------------------------- prompt

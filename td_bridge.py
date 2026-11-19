@@ -25,7 +25,7 @@ import traceback
 import td
 
 TOKEN_FILE = os.path.join(os.path.expanduser("~"), ".aj-mcp", "touchdesigner.token")
-BRIDGE_VERSION = "1.1.0"
+BRIDGE_VERSION = "1.2.0"
 
 
 # ---------------------------------------------------------------- utilita'
@@ -605,12 +605,316 @@ def cmd_batch(args):
 
 
 
+# ------------------------------------------------------- comandi aggiunti (1.2)
+def _stats(vals):
+    vals = [float(v) for v in vals]
+    if not vals:
+        return {}
+    return {"min": round(min(vals), 6), "max": round(max(vals), 6), "avg": round(sum(vals) / len(vals), 6)}
+
+
+def _sample_top(o, points):
+    out = {"resolution": [o.width, o.height]}
+    arr = None
+    with contextlib.suppress(Exception):
+        arr = o.numpyArray(delayed=False)
+    if arr is not None:
+        flat = arr.reshape(-1, arr.shape[-1])
+        out["channels"] = {ch: {"min": round(float(flat[:, i].min()), 5), "max": round(float(flat[:, i].max()), 5),
+                                "avg": round(float(flat[:, i].mean()), 5)}
+                           for i, ch in enumerate("rgba"[: flat.shape[1]])}
+        out["black"] = bool(float(flat[:, :3].max()) < 0.002)
+    pts = points or [[0.5, 0.5]]
+    samples = []
+    for u, v in pts[:64]:
+        px = None
+        with contextlib.suppress(Exception):
+            px = o.sample(u=float(u), v=float(v))
+        if px is None and arr is not None:
+            h, w = arr.shape[0], arr.shape[1]
+            px = arr[min(h - 1, int(float(v) * h)), min(w - 1, int(float(u) * w))]
+        samples.append({"uv": [u, v], "rgba": [round(float(c), 5) for c in px] if px is not None else None})
+    out["samples"] = samples
+    if "channels" not in out:  # senza numpy: statistica su una griglia 4x4 di campioni
+        grid = []
+        for gy in range(4):
+            for gx in range(4):
+                with contextlib.suppress(Exception):
+                    grid.append([float(c) for c in o.sample(u=(gx + 0.5) / 4, v=(gy + 0.5) / 4)])
+        if grid:
+            out["channels"] = {ch: _stats([g[i] for g in grid]) for i, ch in enumerate("rgba"[: len(grid[0])])}
+            out["black"] = max(max(g[:3]) for g in grid) < 0.002
+            out["stats_from"] = "griglia 4x4"
+    return out
+
+
+def _bounds(o):
+    with contextlib.suppress(Exception):
+        b = o.computeBounds()
+        return {"min": [round(b.min.x, 5), round(b.min.y, 5), round(b.min.z, 5)],
+                "max": [round(b.max.x, 5), round(b.max.y, 5), round(b.max.z, 5)],
+                "size": [round(b.size.x, 5), round(b.size.y, 5), round(b.size.z, 5)]}
+    return None
+
+
+def cmd_sample_node(args):
+    """Legge i valori vivi di qualsiasi nodo: TOP (pixel e statistiche), CHOP (canali e
+    min/max/media), SOP e POP (punti, primitive, bounds), DAT (righe), COMP (figli)."""
+    o = _node(args["path"])
+    limit = max(1, min(int(args.get("limit", 32)), 2000))
+    out = {"path": o.path, "type": o.OPType, "family": o.family,
+           "errors": o.errors(recurse=False), "warnings": o.warnings(recurse=False)}
+    fam = o.family
+    if fam == "TOP":
+        out.update(_sample_top(o, args.get("points")))
+    elif fam == "CHOP":
+        chans = list(o.chans())[: int(args.get("max_channels", 64))]
+        out["samples"], out["rate"] = o.numSamples, _plain(getattr(o, "rate", None))
+        out["channels"] = {c.name: {**_stats(list(c.vals)), "first": [round(float(v), 6) for v in list(c.vals)[:limit]]} for c in chans}
+    elif fam in ("SOP", "POP"):
+        out["points"] = int(getattr(o, "numPoints", 0) or 0)
+        out["prims"] = int(getattr(o, "numPrims", 0) or 0)
+        out["bounds"] = _bounds(o)
+        pts = []
+        with contextlib.suppress(Exception):
+            for p in list(o.points)[:limit]:
+                pts.append([round(float(p.x), 5), round(float(p.y), 5), round(float(p.z), 5)])
+        if pts:
+            out["first_points"] = pts
+        for attr in ("pointAttribs", "primAttribs", "vertexAttribs"):
+            with contextlib.suppress(Exception):
+                out[attr] = [a.name for a in getattr(o, attr)]
+    elif fam == "DAT":
+        out["rows"], out["cols"] = o.numRows, o.numCols
+        out["first_rows"] = [[c.val for c in o.row(i)] for i in range(min(o.numRows, limit))]
+    elif o.isCOMP:
+        out["children"] = len(o.children)
+    return out
+
+
+def cmd_op_help(args):
+    """Parametri di un TIPO di operatore (nome, etichetta, pagina, stile, default, voci dei menu)
+    senza lasciare nodi: crea un esemplare temporaneo e lo cancella."""
+    op_type = str(args["op_type"])
+    cls = getattr(td, op_type, None)
+    if cls is None:
+        raise ValueError(f"tipo di operatore sconosciuto: {op_type}")
+    host = _node(args.get("parent", "/project1"))
+    tmp = host.create(cls, "_aj_help_tmp")
+    try:
+        flt = (args.get("filter") or "").lower()
+        pars = []
+        for p in tmp.pars():
+            if flt and flt not in p.name.lower() and flt not in str(p.label).lower():
+                continue
+            info = {"name": p.name, "label": p.label, "page": p.page.name if p.page is not None else "", "style": p.style}
+            with contextlib.suppress(Exception):
+                info["default"] = _plain(p.default)
+            with contextlib.suppress(Exception):
+                if p.isMenu:
+                    info["menu"] = list(p.menuNames)[:60]
+            pars.append(info)
+        return {"op_type": op_type, "family": tmp.family, "inputs": len(tmp.inputConnectors),
+                "outputs": len(tmp.outputConnectors), "count": len(pars), "parameters": pars}
+    finally:
+        tmp.destroy()
+
+
+def cmd_dat_file(args):
+    """Collega un DAT a un file su disco: save (scrive il testo nel file), load (legge il file
+    nel DAT) o sync (imposta il parametro file e la sincronizzazione automatica)."""
+    o = _node(args["path"])
+    if o.family != "DAT":
+        raise ValueError(f"{o.path} non e' un DAT")
+    action = args.get("action", "save")
+    path = os.path.abspath(os.path.expanduser(str(args["file"])))
+    if action == "save":
+        if not os.path.isdir(os.path.dirname(path)):
+            raise ValueError(f"cartella non trovata: {os.path.dirname(path)}")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(o.text)
+        return {"path": o.path, "file": path, "saved_chars": len(o.text)}
+    if not os.path.isfile(path):
+        raise ValueError(f"file non trovato: {path}")
+    if action == "load":
+        with open(path, encoding="utf-8") as f:
+            o.text = f.read()
+        return {"path": o.path, "file": path, "rows": o.numRows}
+    if action == "sync":
+        if getattr(o.par, "file", None) is None:
+            raise ValueError(f"{o.OPType} non ha il parametro file: usa action='load'")
+        o.par.file = path
+        for name in ("syncfile", "loadonstart"):
+            if getattr(o.par, name, None) is not None:
+                setattr(o.par, name, True)
+        return {"path": o.path, "file": path, "synced": getattr(o.par, "syncfile", None) is not None}
+    raise ValueError("action: save | load | sync")
+
+
+CUSTOM_STYLES = {"float": "Float", "int": "Int", "toggle": "Toggle", "pulse": "Pulse", "str": "Str", "string": "Str",
+                 "menu": "Menu", "strmenu": "StrMenu", "rgb": "RGB", "rgba": "RGBA", "xy": "XY", "xyz": "XYZ",
+                 "uv": "UV", "wh": "WH", "file": "File", "folder": "Folder", "op": "OP", "comp": "COMP",
+                 "top": "TOP", "chop": "CHOP", "momentary": "Momentary", "header": "Header"}
+
+
+def _custom_name(name):
+    clean = "".join(ch for ch in str(name) if ch.isalnum())
+    if not clean or not clean[0].isalpha():
+        raise ValueError(f"nome parametro non valido: {name!r} (lettere e numeri, inizia con una lettera)")
+    return clean[0].upper() + clean[1:].lower()
+
+
+def cmd_custom_parameters(args):
+    """Parametri custom di un COMP (i comandi del proprio pannello): list | add | remove."""
+    o = _node(args["path"])
+    if not o.isCOMP:
+        raise ValueError(f"{o.path} non e' un COMP")
+    action = args.get("action", "list")
+    if action == "list":
+        return {"path": o.path, "pages": [{"page": pg.name, "pars": [_par_info(p) for p in pg.pars]} for pg in o.customPages]}
+    name = _custom_name(args["name"])
+    if action == "remove":
+        p = getattr(o.par, name, None)
+        if p is None or not getattr(p, "isCustom", True):
+            raise ValueError(f"{o.path} non ha il parametro custom {name}")
+        p.destroy()
+        return {"path": o.path, "removed": name}
+    if action != "add":
+        raise ValueError("action: list | add | remove")
+    style = CUSTOM_STYLES.get(str(args.get("style", "float")).lower())
+    if style is None:
+        raise ValueError(f"style: {', '.join(sorted(CUSTOM_STYLES))}")
+    if getattr(o.par, name, None) is not None:
+        raise ValueError(f"{o.path} ha gia' un parametro {name}")
+    page_name = args.get("page") or "Custom"
+    page = next((pg for pg in o.customPages if pg.name == page_name), None) or o.appendCustomPage(page_name)
+    group = getattr(page, "append" + style)(name, label=args.get("label") or name)
+    try:  # ParGroup (TD 2022+) o lista di Par: in entrambi i casi si scorre
+        pars = list(group)
+    except TypeError:
+        pars = [group]
+    for p in pars:
+        if args.get("min") is not None:
+            p.normMin = p.min = args["min"]
+            p.clampMin = bool(args.get("clamp"))
+        if args.get("max") is not None:
+            p.normMax = p.max = args["max"]
+            p.clampMax = bool(args.get("clamp"))
+        if args.get("default") is not None and not isinstance(args["default"], list):
+            p.default = args["default"]
+            p.val = args["default"]
+    if isinstance(args.get("default"), list):
+        for p, v in zip(pars, args["default"]):
+            p.default = v
+            p.val = v
+    if args.get("menu"):
+        items = [str(x) for x in args["menu"]]
+        pars[0].menuNames = items
+        pars[0].menuLabels = args.get("menu_labels") or items
+    return {"path": o.path, "page": page.name, "added": [p.name for p in pars], "style": style}
+
+
+def cmd_cook_node(args):
+    """Forza il ricalcolo di un nodo (e, con recurse, di quello che ha a monte) e ne misura il costo."""
+    o = _node(args["path"])
+    before = int(getattr(o, "totalCooks", 0) or 0)
+    o.cook(force=True, recurse=bool(args.get("recurse")))
+    return {"path": o.path, "cooked": int(getattr(o, "totalCooks", 0) or 0) - before,
+            "cpu_ms": round(float(getattr(o, "cpuCookTime", 0) or 0), 3),
+            "gpu_ms": round(float(getattr(o, "gpuCookTime", 0) or 0), 3),
+            "errors": o.errors(recurse=False), "warnings": o.warnings(recurse=False)}
+
+
+GLSL_DEFAULT = """// AJ MCP
+out vec4 fragColor;
+void main()
+{
+    vec2 uv = vUV.st;
+    fragColor = TDOutputSwizzle(vec4(uv, 0.5 + 0.5 * sin(uTime), 1.0));
+}
+"""
+
+
+def cmd_glsl_shader(args):
+    """Crea (o aggiorna) un GLSL TOP con il suo DAT pixel shader, scrive il codice,
+    ricalcola e restituisce gli errori di compilazione."""
+    parent = _node(args.get("parent", "/project1"))
+    name = args.get("name") or "glsl1"
+    code = args.get("code") or GLSL_DEFAULT
+    g = parent.op(name)
+    created = g is None
+    if created:
+        g = parent.create(td.glslTOP, name)
+    elif g.OPType != "glslTOP":
+        raise ValueError(f"{g.path} esiste e non e' un glslTOP")
+    dname = f"{name}_pixel"
+    d = parent.op(dname) or parent.create(td.textDAT, dname)
+    d.text = code
+    d.nodeX, d.nodeY = g.nodeX, g.nodeY - 150
+    if getattr(g.par, "pixeldat", None) is not None:
+        g.par.pixeldat = d.path
+    if args.get("resolution"):
+        w, h = args["resolution"]
+        if getattr(g.par, "outputresolution", None) is not None:
+            g.par.outputresolution = "custom"
+        g.par.resolutionw, g.par.resolutionh = int(w), int(h)
+    for i, src in enumerate(args.get("inputs") or []):
+        if src:
+            cmd_connect_nodes({"source": src, "target": g.path, "target_input": i})
+    if "uTime" in code:  # uniform del tempo sulla pagina Vectors (nomi nuovi e vecchi)
+        for nm, val in (("vec0name", "vec0valuex"), ("uniname0", "value0x")):
+            pn, pv = getattr(g.par, nm, None), getattr(g.par, val, None)
+            if pn is not None and pv is not None:
+                if not pn.eval():
+                    setattr(g.par, nm, "uTime")
+                    _set_par(pv, {"expr": "absTime.seconds"})
+                break
+    with contextlib.suppress(Exception):
+        g.cook(force=True)
+    errs, warns = g.errors(recurse=False), g.warnings(recurse=False)
+    return {"path": g.path, "pixel_dat": d.path, "created": created, "compiled": not errs,
+            "errors": errs, "warnings": warns}
+
+
+def cmd_network_snapshot(args):
+    """Fotografia testuale di una rete: per ogni nodo tipo, posizione, flag, ingressi e solo i
+    parametri cambiati rispetto al default. Serve a capire, confrontare o ricostruire una rete."""
+    root = _node(args.get("path", "/project1"))
+    depth = max(1, min(int(args.get("depth", 1)), 6))
+    with_text = bool(args.get("include_dat_text"))
+    nodes = []
+    for o in root.findChildren(depth=depth)[:500]:
+        changed = {}
+        for p in o.pars():
+            with contextlib.suppress(Exception):
+                if p.readOnly:
+                    continue
+                mode = str(p.mode)
+                if "EXPRESSION" in mode.upper():
+                    changed[p.name] = {"expr": p.expr}
+                elif "BIND" in mode.upper():
+                    changed[p.name] = {"bind": p.bindExpr}
+                elif not hasattr(p, "default") or _plain(p.eval()) != _plain(p.default):
+                    changed[p.name] = _plain(p.eval())
+        entry = {"path": o.path[len(root.path) + 1:] if o.path.startswith(root.path + "/") else o.path,
+                 "type": o.OPType, "x": o.nodeX, "y": o.nodeY,
+                 "inputs": [i.name if i is not None else None for i in o.inputs], "params": changed}
+        flags = {f: bool(getattr(o, f)) for f in ("bypass", "display", "render", "lock") if getattr(o, f, False)}
+        if flags:
+            entry["flags"] = flags
+        if with_text and o.family == "DAT":
+            entry["text"] = o.text[:4000]
+        nodes.append(entry)
+    return {"path": root.path, "count": len(nodes), "nodes": nodes}
+
+
+
 COMMANDS = {name[4:]: fn for name, fn in list(globals().items()) if name.startswith("cmd_")}
 
 
 READ_ONLY = {"status", "list_nodes", "node_info", "get_parameters", "node_errors", "top_preview",
              "list_operator_types", "find_nodes", "read_dat", "read_chop", "python_help",
-             "get_performance", "undo"}
+             "get_performance", "undo", "sample_node", "op_help", "network_snapshot", "cook_node"}
 
 
 def _undoable(name, fn, args):

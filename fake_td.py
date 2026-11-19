@@ -21,7 +21,7 @@ class ParMode:
 
 class Par:
     def __init__(self, owner, name, value, style="Float", page="Common"):
-        self.owner, self.name, self.val = owner, name, value
+        self.owner, self.name, self.val, self.default = owner, name, value, value
         self.label, self.style, self.mode, self.readOnly = name.title(), style, "ParMode.CONSTANT", False
         self.page = types.SimpleNamespace(name=page)
         self.pulsed = 0
@@ -117,7 +117,7 @@ class Node:
             setattr(node.par, p.name, p.val)
         return node
 
-    def cook(self, force=False):
+    def cook(self, force=False, recurse=False):
         self.totalCooks += 1
 
     def save(self, path):
@@ -192,6 +192,65 @@ class Node:
     def saveByteArray(self, ext):
         return bytearray(PNG_1X1)
 
+    # --- valori vivi (1.2)
+    def sample(self, u=0.5, v=0.5, x=None, y=None):
+        return (float(u), float(v), 0.0, 1.0)
+
+    numPoints, numPrims = 8, 6
+
+    @property
+    def points(self):
+        return [types.SimpleNamespace(x=float(i % 2), y=float((i // 2) % 2), z=float(i // 4)) for i in range(self.numPoints)]
+
+    def computeBounds(self):
+        v = types.SimpleNamespace
+        return v(min=v(x=0.0, y=0.0, z=0.0), max=v(x=1.0, y=1.0, z=1.0), size=v(x=1.0, y=1.0, z=1.0))
+
+    # --- parametri custom (1.2)
+    @property
+    def customPages(self):
+        return self.__dict__.setdefault("_pages", [])
+
+    def appendCustomPage(self, name):
+        pg = CustomPage(self, name)
+        self.customPages.append(pg)
+        return pg
+
+
+class CustomPage:
+    def __init__(self, owner, name):
+        self.owner, self.name, self.pars = owner, name, []
+
+    def _add(self, name, label, style, value, suffixes=("",)):
+        made = []
+        for sfx in suffixes:
+            p = Par(self.owner, name + sfx, value, style=style, page=self.name)
+            p.label, p.isCustom, p.default = label, True, value
+            p.min = p.max = p.normMin = p.normMax = None
+            p.clampMin = p.clampMax = False
+            p.menuNames = p.menuLabels = []
+            owner_pars = self.owner.par
+            p.destroy = (lambda pp=p: (self.pars.remove(pp), owner_pars.__dict__.pop(pp.name, None)))
+            setattr(owner_pars, p.name, p)
+            self.pars.append(p)
+            made.append(p)
+        return made
+
+    def appendFloat(self, name, label=None):
+        return self._add(name, label, "Float", 0.0)
+
+    def appendInt(self, name, label=None):
+        return self._add(name, label, "Int", 0)
+
+    def appendToggle(self, name, label=None):
+        return self._add(name, label, "Toggle", False)
+
+    def appendMenu(self, name, label=None):
+        return self._add(name, label, "Menu", "")
+
+    def appendRGB(self, name, label=None):
+        return self._add(name, label, "RGB", 0.0, ("r", "g", "b"))
+
 
 def _kind(name, family, comp=False, **defaults):
     return type(name, (Node,), {"family": family, "suffix": family, "comp": comp, "defaults": defaults})
@@ -205,6 +264,19 @@ tableDAT = _kind("tableDAT", "DAT")
 geometryCOMP = _kind("geometryCOMP", "COMP", comp=True)
 webserverDAT = _kind("webserverDAT", "DAT", port=9980, callbacks="")
 baseCOMP = _kind("baseCOMP", "COMP", comp=True)
+boxSOP = _kind("boxSOP", "SOP", sizex=1.0)
+glslTOP = _kind("glslTOP", "TOP", pixeldat="", resolutionw=256, resolutionh=256, outputresolution="useinput",
+                vec0name="", vec0valuex=0.0)
+
+
+def _glsl_errors(self, recurse=False):
+    dat = op(self.par.pixeldat.val) if self.par.pixeldat.val else None
+    if dat is not None and "ERRORE" in dat.text:
+        return "Compile error: 'ERRORE' : syntax error"
+    return ""
+
+
+glslTOP.errors = _glsl_errors
 
 ROOT = baseCOMP(None, "")
 ROOT.create(baseCOMP, "project1")

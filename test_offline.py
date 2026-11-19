@@ -246,6 +246,66 @@ already = m.open_touchdesigner()
 assert already["opened"] is False and "gia' aperto" in already["note"], already
 
 # --- TouchDesigner spento
+# --- 1.2: valori vivi, aiuto sui tipi, DAT su file, parametri custom, cook, GLSL, fotografia
+m.create_node("noiseTOP", name="n12")
+r = m.sample_node("/project1/n12", points=[[0.25, 0.75]])
+assert r["family"] == "TOP" and r["samples"][0]["rgba"][:2] == [0.25, 0.75] and "channels" in r and r["black"] is False, r
+m.create_node("constantCHOP", name="c12")
+r = m.sample_node("/project1/c12")
+assert r["channels"]["chan1"]["max"] == 0.75 and r["channels"]["chan1"]["avg"] == 0.375, r
+m.create_node("boxSOP", name="box12")
+r = m.sample_node("/project1/box12", limit=3)
+assert r["points"] == 8 and r["bounds"]["size"] == [1.0, 1.0, 1.0] and len(r["first_points"]) == 3, r
+r = m.op_help("noiseTOP", filter="period")
+assert r["count"] == 1 and r["parameters"][0]["default"] == 1.0 and fake_td.op("/project1/_aj_help_tmp") is None, r
+try:
+    m.op_help("nienteTOP")
+    raise AssertionError("tipo sconosciuto doveva fallire")
+except RuntimeError as e:
+    assert "sconosciuto" in str(e)
+m.create_node("textDAT", name="script12")
+m.write_dat("/project1/script12", text="print('ciao')")
+f = Path(tempfile.mkdtemp()) / "script12.py"
+r = m.dat_file("/project1/script12", str(f), "save")
+assert f.read_text() == "print('ciao')" and r["saved_chars"] == 13, r
+f.write_text("print('dal disco')")
+m.dat_file("/project1/script12", str(f), "load")
+assert fake_td.op("/project1/script12").text == "print('dal disco')"
+try:
+    m.dat_file("/project1/script12", str(f), "sync")
+    raise AssertionError("textDAT finto senza par.file doveva fallire")
+except RuntimeError as e:
+    assert "load" in str(e)
+m.create_node("baseCOMP", name="ctrl12")
+r = m.custom_parameters("/project1/ctrl12", "add", name="velocita", min=0, max=10, default=2.5)
+assert r["added"] == ["Velocita"] and fake_td.op("/project1/ctrl12").par.Velocita.val == 2.5, r
+r = m.custom_parameters("/project1/ctrl12", "add", name="colore", style="rgb")
+assert r["added"] == ["Colorer", "Coloreg", "Coloreb"], r
+r = m.custom_parameters("/project1/ctrl12", "add", name="modo", style="menu", menu=["a", "b"])
+assert fake_td.op("/project1/ctrl12").par.Modo.menuNames == ["a", "b"]
+r = m.custom_parameters("/project1/ctrl12")
+assert [p["name"] for p in r["pages"][0]["pars"]][:1] == ["Velocita"] and len(r["pages"][0]["pars"]) == 5, r
+m.custom_parameters("/project1/ctrl12", "remove", name="Velocita")
+assert getattr(fake_td.op("/project1/ctrl12").par, "Velocita", None) is None
+for bad in ({"name": "Modo"}, {"name": "x", "style": "nope"}, {"name": "1abc"}):
+    try:
+        m.custom_parameters("/project1/ctrl12", "add", **bad)
+        raise AssertionError(f"doveva fallire: {bad}")
+    except RuntimeError:
+        pass
+r = m.cook_node("/project1/n12")
+assert r["cooked"] == 1, r
+r = m.glsl_shader("sh12")
+assert r["created"] and r["compiled"] and fake_td.op("/project1/sh12").par.pixeldat.val == "/project1/sh12_pixel", r
+assert fake_td.op("/project1/sh12").par.vec0valuex.expr == "absTime.seconds"
+r = m.glsl_shader("sh12", code="ERRORE", resolution=[640, 360])
+assert not r["created"] and not r["compiled"] and "syntax" in r["errors"] and fake_td.op("/project1/sh12").par.resolutionw.val == 640, r
+m.set_parameters("/project1/n12", {"period": 3.0})
+r = m.network_snapshot("/project1")
+n12 = next(n for n in r["nodes"] if n["path"] == "n12")
+assert n12["params"] == {"period": 3.0} and n12["type"] == "noiseTOP", n12
+
+
 server.shutdown()
 server.server_close()
 try:
@@ -276,9 +336,10 @@ except RuntimeError as e:
     assert "file non trovato" in str(e), e
 os.environ.pop("AJ_TD_EXE")
 
+
 tools = asyncio.run(m.mcp.list_tools())
 names = sorted(t.name for t in tools)
-assert len(names) == 34, names
+assert len(names) == 41, names
 prompts = asyncio.run(m.mcp.list_prompts())
 assert sorted(p.name for p in prompts) == ["controlla_rete", "costruisci_rete"], prompts
 assert "exec(open(" in m._install_command()

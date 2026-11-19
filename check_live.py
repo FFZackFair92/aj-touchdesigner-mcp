@@ -7,7 +7,7 @@ il resto del progetto non viene toccato.
 """
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mcp>=1.2,<2"]
+# dependencies = ["mcp>=1.10,<3"]
 # ///
 import sys
 from pathlib import Path
@@ -64,9 +64,26 @@ try:
     assert r["steps"] == 2, r
     print("python_help + batch: ok")
 
+    # 1.2
+    r = m.sample_node(a["path"])
+    assert r["channels"] and r["samples"][0]["rgba"], r
+    assert m.sample_node(k["path"])["channels"], "sample_node CHOP vuoto"
+    h = m.op_help("noiseTOP", filter="period")
+    assert h["count"] >= 1 and m.run_python("result = op('/project1/_aj_help_tmp') is None")["result"]
+    g = m.glsl_shader("shader", parent=BOX)
+    assert g["compiled"], g
+    bad = m.glsl_shader("shader", parent=BOX, code="out vec4 fragColor; void main(){ ERRORE }")
+    assert not bad["compiled"], "lo shader sbagliato doveva dare errore"
+    m.custom_parameters(BOX, "add", name="velocita", min=0, max=10, default=2)
+    assert any(p["name"] == "Velocita" for pg in m.custom_parameters(BOX)["pages"] for p in pg["pars"])
+    m.custom_parameters(BOX, "remove", name="velocita")
+    snap = m.network_snapshot(BOX)
+    assert any(n["path"] == "finale" and "opacity" in n["params"] for n in snap["nodes"]), snap
+    print("1.2 (sample_node, op_help, glsl_shader, custom_parameters, network_snapshot): ok")
+
     e = m.node_errors(BOX)
     print(f"errori nel COMP di prova: {e['errors'] or 'nessuno'}")
-    assert m.list_nodes(BOX)["count"] == 6
+    assert m.list_nodes(BOX)["count"] == 8
 finally:
     m.delete_node(BOX)
 print("tutto ok, COMP di prova eliminato")
